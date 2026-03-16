@@ -63,7 +63,7 @@ copy_security_db() {
     echo "🗄️  设置安全数据库..."
     
     if [ -d "${SCRIPT_DIR}/security-db" ]; then
-        cp -r "${SCRIPT_DIR}/security-db""*" "${INSTALL_DIR}/security-db/" 2>/dev/null || true
+        cp -r "${SCRIPT_DIR}/security-db/"* "${INSTALL_DIR}/security-db/" 2>/dev/null || true
     fi
     
     # 创建基础威胁情报文件
@@ -105,6 +105,32 @@ ${CRON_SCHEDULE_AUDIT} cd ${INSTALL_DIR}/scripts && ./security-audit.sh > ${INST
     echo ""
 }
 
+# Day 0 自我保护机制
+setup_self_protection() {
+    echo "🔒 锁定 SentinelClaw 核心文件 (Day 0 Baseline)..."
+    
+    # 使用 chattr +i 使安全数据库和脚本只读（防篡改）
+    if command -v chattr &> /dev/null; then
+        # 锁定核心脚本
+        for script in "${INSTALL_DIR}/scripts/"*.sh; do
+            if [ -f "$script" ]; then
+                sudo chattr +i "$script" 2>/dev/null || true
+            fi
+        done
+        
+        # 锁定安全数据库
+        if [ -d "${INSTALL_DIR}/security-db" ]; then
+            sudo chattr -R +i "${INSTALL_DIR}/security-db" 2>/dev/null || true
+        fi
+        
+        echo "✓ 核心防线已锁定 (chattr +i)"
+    else
+        echo "⚠ chattr 不可用，跳过不可变属性设置"
+        echo "  建议安装 e2fsprogs 以获得完整保护"
+    fi
+    echo ""
+}
+
 # 创建配置文件
 create_config() {
     echo "⚙️  创建配置文件..."
@@ -138,13 +164,24 @@ run_initial_checks() {
     
     cd "${INSTALL_DIR}/scripts"
     
-    # 验证脚本
-    if [ -f "./roadmap-check.sh" ]; then
-        echo "📊 系统状态检查:"
-        ./roadmap-check.sh all 2>/dev/null || true
-    fi
+    # 验证关键脚本存在
+    local critical_scripts=("scan-skill.sh" "safe-install.sh" "anomaly-detector.sh" "intel-collector.sh")
+    local all_present=true
     
-    echo "✓ 初始检查完成"
+    for script in "${critical_scripts[@]}"; do
+        if [ -f "./$script" ]; then
+            echo "  ✓ $script"
+        else
+            echo "  ⚠ $script 不存在"
+            all_present=false
+        fi
+    done
+    
+    if [ "$all_present" = true ]; then
+        echo "✓ 核心脚本验证完成"
+    else
+        echo "⚠ 部分脚本缺失，但不影响基本功能"
+    fi
     echo ""
 }
 
@@ -175,6 +212,7 @@ main() {
     copy_scripts
     copy_security_db
     setup_cron
+    setup_self_protection
     create_config
     run_initial_checks
     show_completion

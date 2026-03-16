@@ -83,17 +83,10 @@ echo "  Skill Security Scan: $SKILL_NAME"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
-# Check if SKILL.md exists
-SKILL_MD="$SKILL_PATH/SKILL.md"
-if [ ! -f "$SKILL_MD" ]; then
-    echo -e "${RED}✗${NC} SKILL.md not found"
-    exit 1
-fi
-
-echo "Scanning $SKILL_MD..."
+echo "Scanning source code for risk indicators..."
 echo ""
 
-# Risk indicators with scores
+# 风险指标字典
 declare -A RISK_INDICATORS=(
     ["exec"]=15
     ["spawn"]=15
@@ -112,22 +105,56 @@ declare -A RISK_INDICATORS=(
     ["~/.clawdbot/.env"]=25
     ["~/.ssh/id_rsa"]=25
     ["~/.bashrc"]=15
+    ["base64"]=5
+    ["decode"]=5
+    ["import os"]=3
+    ["subprocess"]=10
+    ["system("]=10
+    ["popen"]=10
 )
 
 FOUND_RISKS=()
+SCANNED_FILES=0
 
-# Check for risk indicators
-echo "Checking for risk indicators..."
-for indicator in "${!RISK_INDICATORS[@]}"; do
-    if grep -qi "$indicator" "$SKILL_MD" 2>/dev/null; then
-        score=${RISK_INDICATORS[$indicator]}
-        RISK_SCORE=$((RISK_SCORE + score))
-        FOUND_RISKS+=("$indicator:$score")
-        if $VERBOSE; then
-            echo -e "  ${YELLOW}⚠${NC} Found '$indicator' (+$score risk)"
-        fi
+# 扫描所有代码文件（不仅是 SKILL.md）
+while IFS= read -r -d '' file; do
+    SCANNED_FILES=$((SCANNED_FILES + 1))
+    
+    # 跳过二进制文件
+    if file "$file" | grep -q "binary"; then
+        continue
     fi
-done
+    
+    # 扫描风险指标
+    for indicator in "${!RISK_INDICATORS[@]}"; do
+        if grep -qiE "$indicator" "$file" 2>/dev/null; then
+            score=${RISK_INDICATORS[$indicator]}
+            
+            # 检查是否已在该文件中报告过此指标
+            local already_reported=false
+            for reported in "${FOUND_RISKS[@]}"; do
+                if [[ "$reported" == "$indicator in $(basename "$file")"* ]]; then
+                    already_reported=true
+                    break
+                fi
+            done
+            
+            if [ "$already_reported" = false ]; then
+                RISK_SCORE=$((RISK_SCORE + score))
+                FOUND_RISKS+=("$indicator in $(basename "$file"):$score")
+                
+                if $VERBOSE; then
+                    echo -e "  ${YELLOW}⚠${NC} Found '$indicator' in $(basename "$file") (+$score risk)"
+                fi
+            fi
+        fi
+    done
+done < <(find "$SKILL_PATH" -type f \( -name "*.sh" -o -name "*.py" -o -name "*.js" -o -name "*.json" -o -name "*.md" -o -name "SKILL.md" \) -print0)
+
+echo "Scanned $SCANNED_FILES files"
+echo ""
+
+# Check for IOCs
 
 # Check for IOCs
 echo ""

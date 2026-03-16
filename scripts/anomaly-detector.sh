@@ -26,6 +26,7 @@ NC='\033[0m'
 
 CONTINUOUS=false
 GENERATE_REPORT=false
+REALTIME_MONITOR=false
 ANOMALIES_FOUND=0
 
 usage() {
@@ -35,12 +36,15 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --continuous    Run continuous monitoring (until interrupted)"
+    echo "  --realtime      Start real-time credential monitoring (inotify)"
+    echo "  --stop          Stop real-time monitoring"
     echo "  --report        Generate anomaly report"
     echo "  -h, --help      Show this help"
     echo ""
     echo "Examples:"
     echo "  $0              # Single check"
     echo "  $0 --continuous # Continuous monitoring"
+    echo "  $0 --realtime   # Real-time credential monitoring"
     echo "  $0 --report     # Generate report"
 }
 
@@ -105,6 +109,62 @@ check_credential_access() {
             fi
         fi
     done
+}
+
+# 实时监控凭证文件访问（使用 inotify）
+monitor_credentials_realtime() {
+    local watch_dir="$WORKSPACE_DIR/.openclaw"
+    
+    # 检查 inotifywait 是否可用
+    if ! command -v inotifywait >/dev/null 2>&1; then
+        log_anomaly "WARN" "SYSTEM" "inotify-tools not installed, falling back to static check."
+        return 1
+    fi
+    
+    # 确保监控目录存在
+    if [ ! -d "$watch_dir" ]; then
+        mkdir -p "$watch_dir" 2>/dev/null || {
+            log_anomaly "WARN" "SYSTEM" "Cannot create watch directory: $watch_dir"
+            return 1
+        }
+    fi
+    
+    echo "🟢 Starting real-time credential monitoring..."
+    echo "   Watching: $watch_dir"
+    echo "   Press Ctrl+C to stop"
+    echo ""
+    
+    # 使用 inotifywait 实时监控
+    inotifywait -m -r -e access,modify,attrib,create,delete \
+        --format '%T|%w|%f|%e|%s' \
+        --timefmt '%Y-%m-%d %H:%M:%S' \
+        "$watch_dir" 2>/dev/null | while IFS='|' read timestamp path filename event size; do
+        
+        local fullpath="${path}${filename}"
+        
+        # 只监控敏感文件
+        if [[ "$fullpath" =~ (credentials|secret|token|key|password) ]]; then
+            log_anomaly "CRITICAL" "REALTIME_ACCESS" "CREDENTIAL FILE ACCESSED: $filename ($event) at $timestamp"
+        fi
+    done &
+    
+    local monitor_pid=$!
+    echo "✓ Real-time monitor started (PID: $monitor_pid)"
+    
+    # 保存 PID 以便后续停止
+    echo $monitor_pid > "$LOG_DIR/.realtime-monitor.pid"
+}
+
+# 停止实时监控
+stop_realtime_monitor() {
+    if [ -f "$LOG_DIR/.realtime-monitor.pid" ]; then
+        local pid=$(cat "$LOG_DIR/.realtime-monitor.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            echo "✓ Real-time monitor stopped (PID: $pid)"
+        fi
+        rm -f "$LOG_DIR/.realtime-monitor.pid"
+    fi
 }
 
 # Check for network connections to suspicious IPs
@@ -280,6 +340,14 @@ while [[ $# -gt 0 ]]; do
             CONTINUOUS=true
             shift
             ;;
+        --realtime)
+            REALTIME_MONITOR=true
+            shift
+            ;;
+        --stop)
+            stop_realtime_monitor
+            exit 0
+            ;;
         --report)
             GENERATE_REPORT=true
             shift
@@ -298,6 +366,12 @@ done
 
 # Initialize
 init
+
+# Handle realtime mode
+if [ "$REALTIME_MONITOR" = true ]; then
+    monitor_credentials_realtime
+    exit 0
+fi
 
 # Main execution
 if [ "$GENERATE_REPORT" = true ]; then
