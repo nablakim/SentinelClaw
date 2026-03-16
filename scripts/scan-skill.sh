@@ -131,7 +131,7 @@ while IFS= read -r -d '' file; do
             score=${RISK_INDICATORS[$indicator]}
             
             # 检查是否已在该文件中报告过此指标
-            local already_reported=false
+            already_reported=false
             for reported in "${FOUND_RISKS[@]}"; do
                 if [[ "$reported" == "$indicator in $(basename "$file")"* ]]; then
                     already_reported=true
