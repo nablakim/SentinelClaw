@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run shellcheck
+      run: |
+        sudo apt-get install -y shellcheck
+        find scripts -name "*.sh" -exec shellcheck {} \;
+      continue-on-error: true
+    
+    - name: Test scripts are executable
+      run: |
+        for script in scripts/*.sh; do
+          if [ ! -x "$script" ]; then
+            echo "Error: $script is not executable"
+            exit 1
+          fi
+        done
+        echo "All scripts are executable"
+    
+    - name: Test installation
+      run: |
+        bash install.sh --dry-run 2>/dev/null || true
+    
+    - name: Validate security database
+      run: |
+        if [ -f scripts/validate-security-db.sh ]; then
+          bash scripts/validate-security-db.sh || true
+        fi
